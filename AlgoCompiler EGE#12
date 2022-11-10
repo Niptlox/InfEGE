@@ -1,0 +1,216 @@
+code = """
+НАЧАЛО
+ПОКА нашлось (01) ИЛИ нашлось (02) ИЛИ нашлось (03)
+    заменить (01, 20)
+    заменить (02, 120)
+    ЕСЛИ нашлось (03)
+    заменить (03, 302)
+    КОНЕЦ ЕСЛИ
+КОНЕЦ ПОКА
+КОНЕЦ
+"""
+
+
+def block_of_structure(structure, position):
+    block = structure
+    for i in position[:-1]:
+        block = block[i][2]
+    return block
+
+
+class AlgoCompiler:
+    def __init__(self, code, input_str, debug=True):
+        self.steck = []
+        self.num_line = 0
+        self.line = ""
+        self.code = code.split("\n")
+        self.code_structure = []
+        self.debug = debug
+        self.variable = input_str
+
+    def generate_code_structure(self):
+        num_line = 0
+        steck = []
+        position = []
+        structure = []
+        block_words = {"ПОКА", "ЕСЛИ"}
+        while num_line < len(self.code):
+            line = self.code[num_line].rstrip().lstrip()
+            if line:
+                if line == 'НАЧАЛО':
+                    steck.append((num_line, line))
+                    # block_of_structure(structure, position).append((line, []))
+                    position.append(0)
+                elif line == 'КОНЕЦ':
+                    if steck[-1][1] == "НАЧАЛО":
+                        num_line = len(self.code)
+                    else:
+                        self.except_close_block(num_line)
+                elif steck:
+                    words = line.split(" ")
+                    command = words[0]
+                    if command in block_words:
+                        steck.append((num_line, command))
+                        block_of_structure(structure, position).append((1, (num_line, line), []))
+                        position.append(0)
+                    elif command == "КОНЕЦ":
+                        if len(words) != 2:
+                            self.run_exception("Ожидалось одно слова после КОНЕЦ", num_line)
+                        word_2 = words[1]
+                        if word_2 == steck[-1][1]:
+                            steck.pop(-1)
+                        else:
+                            self.except_close_block(num_line)
+                        position.pop(-1)
+                    else:
+                        # other commands
+                        block_of_structure(structure, position).append((0, (num_line, line)))
+                        position[-1] += 1
+                else:
+                    self.except_close_block(num_line)
+            num_line += 1
+        return structure
+
+    def compile(self):
+        self.code_structure = self.generate_code_structure()
+        return self.compile_block(self.code_structure)
+
+    def compile_block(self, block):
+        block_i = 0
+        while block_i < len(block):
+            element = block[block_i]
+            self.num_line = block[block_i][1][0]
+            self.line = block[block_i][1][1]
+            self.debug_print(self.num_line, ">>>", self.line)
+            words = self.line.split(" ")
+            command = words[0]
+            if element[0] == 0:
+                # it's line
+                if command == "заменить":
+                    params, end_i = self.get_params(self.line[len(command) + 1:])
+                    self.replace(params)
+            elif element[0] == 1:
+                # it's block
+                if command == "ПОКА":
+                    condition = True
+                    while condition:
+                        condition = self.condition_processing(self.line[len(command) + 1:])
+                        if condition:
+                            self.debug_print(f"Результат условия {self.line[len(command) + 1:]} равен {condition}")
+                            self.compile_block(element[2])
+                elif command == "ЕСЛИ":
+                    condition = self.condition_processing(self.line[len(command) + 1:])
+                    if condition:
+                        self.debug_print(f"Результат условия {self.line[len(command) + 1:]} равен {condition}")
+                        self.compile_block(element[2])
+            block_i += 1
+        return self.variable
+
+    def condition_processing(self, st: str):
+        if not st:
+            self.except_close_block()
+        i = 0
+        word_start_i = -1
+        operations = {"И": lambda a, b: a and b, "ИЛИ": lambda a, b: a or b}
+        current_operation = None
+        current_value = None
+        while i < len(st):
+            sym = st[i]
+            if word_start_i == -1:
+                if sym != " ":
+                    word_start_i = i
+            else:
+                if not sym.isalpha():
+                    word = st[word_start_i:i]
+                    if word == "нашлось":
+                        params, end_i = self.get_params(st[i:])
+                        value = self.find_in_variable(params)
+                        if current_value:
+                            if current_operation:
+                                current_value = current_operation(current_value, value)
+                                current_operation = None
+                            else:
+                                self.except_syntax_operation()
+                        else:
+                            current_value = value
+                            current_operation = None
+                        i += end_i
+                    if word in operations:
+                        if current_operation:
+                            self.except_syntax_operation()
+                        else:
+                            if current_value:
+                                current_operation = operations[word]
+                            else:
+                                self.except_syntax_operation()
+                    word_start_i = -1
+            i += 1
+        return current_value
+
+    def find_in_variable(self, params):
+        if len(params) == 1:
+            self.debug_print(f"Поиск {params[0]} в строке {self.variable}")
+            return params[0] in self.variable
+        else:
+            self.run_exception(f"В команде Нашлось ожидаеться 1 параметр, а задано {len(params)} параметров.")
+
+    def replace(self, params):
+        if len(params) == 2:
+            self.debug_print(f"Замена в {self.variable} подстроку {params[0]} на {params[1]}", )
+            self.variable = self.variable.replace(params[0], params[1])
+        else:
+            self.run_exception(f"В команде Замена ожидаеться 2 параметр, а задано {len(params)} параметров.")
+
+    def debug_print(self, *args, **quargs):
+        if self.debug:
+            print(*args, **quargs)
+
+    def goto_end(self):
+        self.goto(len(self.code))
+
+    def goto(self, num_line):
+        self.num_line = num_line
+
+    def run_exception(self, st, num_line=-1):
+        if num_line == -1:
+            num_line = self.num_line
+        raise Exception(f"{st} Cтрока {num_line + 1}: \n{self.code[num_line]}")
+
+    def except_syntax_operation(self):
+        self.run_exception("Ошибка синтаксиса, порядка операций.")
+
+    def except_params(self):
+        self.run_exception("Не правильно записаны параметры.")
+
+    def except_close_block(self, num_line=-1):
+        self.run_exception("Не правильно закрыт блок.", num_line)
+
+    def get_params(self, st: str):
+        st = st.replace(" ", "")
+        skobka = False
+        params = []
+        start_param = -1
+        end_i = -1
+        for i in range(len(st)):
+            sym = st[i]
+            if skobka:
+                if sym == "," or sym == ")":
+                    if start_param == -1:
+                        self.except_params()
+                    else:
+                        params.append(st[start_param: i])
+                        start_param = -1
+                    if sym == ")":
+                        end_i = i
+                        break
+                elif start_param == -1:
+                    start_param = i
+            elif sym == "(":
+                skobka = True
+        else:
+            self.except_params()
+        return params, end_i
+
+
+if __name__ == '__main__':
+    print(AlgoCompiler(code, "0112001").compile())
